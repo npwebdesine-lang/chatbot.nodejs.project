@@ -1,62 +1,106 @@
 import express from "express";
-import path from "path"; // מייבא את מודול path של Node לעבודה עם נתיבי קבצים בצורה תקינה בכל מערכת הפעלה
-import { fileURLToPath } from "url"; // מייבא פונקציה להמרת URL של מודול ES (import.meta.url) לנתיב קובץ רגיל
-import OpenAI from "openai"; // מייבא את ה-SDK של OpenAI כדי לבצע קריאות API לשירות
+import path from "path";
+import { fileURLToPath } from "url";
+import OpenAI from "openai";
 
-// יצירת אפליקציית Express
 const app = express();
-app.use(express.json()); // מאפשר לאפליקציה לפרש בקשות JSON אוטומטית
+app.use(express.json());
 
-// הגדרת נתיבים לתיקיית public
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const __filename = fileURLToPath(import.meta.url); // מחשב את נתיב הקובץ הנוכחי (כמו __filename ב-CommonJS) מתוך import.meta.url
-const __dirname = path.dirname(__filename); // מחשב את תיקיית הקובץ הנוכחי (כמו __dirname ב-CommonJS)
-
-// הגדרת תיקיית public כסטטית כדי לשרת קבצים כמו HTML, CSS, JS
+// מגיש את תיקיית public (HTML/CSS/JS)
 app.use(express.static(path.join(__dirname, "public")));
 
-// יצירת לקוח OpenAI עם מפתח API מה-Environment
+// ✅ OpenAI client
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-app.get("/healthz", (req, res) => res.status(200).send("ok")); // נתיב בדיקת בריאות: מחזיר 200 וטקסט "ok" כדי לוודא שהשרת חי
+// ✅ Health check
+app.get("/healthz", (req, res) => res.status(200).send("ok"));
 
-app.get("/", (req, res) => {
-  res.send("Server is running ✅");
+// ===============================
+// ✅ NEW: ניהול צ'אטים והיסטוריה
+// ===============================
+/**
+ * chats = Map<chatId, Array<{role: "system"|"user"|"assistant", content: string}>>
+ * כל chatId שומר מערך messages של שיחה אחת.
+ */
+const chats = new Map();
+
+//הגדרת פרומפט מערכת וקבועים להיסטוריית הצ'אט
+// ✅ NEW: קבועים לשליטה על גודל ההיסטוריה (כדי לא להתפוצץ בטוקנים)
+const SYSTEM_PROMPT = "אתה צ'אטבוט עוזר, ענה בקצרה וברורה.";
+const MAX_TURNS = 20; // כמה זוגות user+assistant נשמור
+
+function getOrCreateChat(chatId) {
+  if (!chats.has(chatId)) {
+    chats.set(chatId, [{ role: "system", content: SYSTEM_PROMPT }]);
+  }
+  return chats.get(chatId);
+}
+
+function trimHistory(messages) {
+  // משאירים system + אחריו עד MAX_TURNS*2 הודעות (user+assistant)
+  const system = messages[0]?.role === "system" ? [messages[0]] : [];
+  const rest = messages.filter((m) => m.role !== "system");
+
+  const maxMsgs = MAX_TURNS * 2;
+  const trimmedRest = rest.slice(-maxMsgs);
+
+  return [...system, ...trimmedRest];
+}
+
+// (לא חובה, אבל נחמד) לראות אילו צ'אטים קיימים בזיכרון השרת
+app.get("/api/chats", (req, res) => {
+  res.json({ chatIds: Array.from(chats.keys()) });
 });
 
 app.post("/api/chat", async (req, res) => {
-  // מגדיר נתיב POST ל-API של צ'אט; async כי יהיו פעולות אסינכרוניות (קריאת API)
   try {
-    // מתחיל בלוק try כדי לתפוס שגיאות ולמנוע קריסה/החזרת תשובות לא מסודרות
+    // ✅ NEW: מקבלים גם chatId
+    const { chatId, message } = req.body || {};
 
-    // חילוץ message מהגוף של הבקשה
-    const { message } = req.body || {};
+    if (!chatId || typeof chatId !== "string") {
+      return res.status(400).json({ error: "chatId is required" });
+    }
     if (!message || typeof message !== "string") {
-      // בודק שהתקבל message וגם שהוא מחרוזת
-      return res.status(400).json({ error: "message is required" }); // אם לא תקין, מחזיר שגיאת 400 עם JSON שמסביר מה חסר
+      return res.status(400).json({ error: "message is required" });
     }
 
-    //ק
-    // קריאה ל-API של OpenAI עם ההודעה מהמשתמש
-    const response = await client.responses.create({
-      model: "gpt-4o-mini", // מציין באיזה מודל להשתמש
-      input: message, // שולח את טקסט המשתמש כקלט למודל
+    // ✅ NEW: טוענים/יוצרים היסטוריה לצ'אט הזה
+    const history = getOrCreateChat(chatId);
+
+    // מוסיפים הודעת משתמש להיסטוריה
+    history.push({ role: "user", content: message });
+
+    // חותכים היסטוריה אם גדלה מדי
+    const trimmed = trimHistory(history);
+    chats.set(chatId, trimmed);
+
+    // ✅ NEW: קריאה עם messages (היסטוריה) כדי לקבל שיחה מתמשכת
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: chats.get(chatId),
     });
 
-    // Extract a safe text output // הערה: מנסים לחלץ טקסט בצורה "בטוחה" מכמה שדות אפשריים
-    const text = // מגדיר משתנה text שיכיל את הטקסט שחולץ מהתגובה
-      response.output_text || (response.output?.[0]?.content?.[0]?.text ?? ""); // קודם מנסה output_text; אם לא קיים מנסה נתיב חלופי עם optional chaining; ואם גם זה לא קיים מחזיר מחרוזת ריקה
+    const reply = completion.choices?.[0]?.message?.content?.trim() || "";
 
-    res.json({ reply: text || "No response text received." }); // מחזיר תשובת JSON ללקוח עם reply; אם text ריק מחזיר הודעת ברירת מחדל
+    // מוסיפים תשובת בוט להיסטוריה
+    const updated = chats.get(chatId);
+    updated.push({ role: "assistant", content: reply });
+
+    // חותכים שוב אם צריך
+    chats.set(chatId, trimHistory(updated));
+
+    res.json({ reply });
   } catch (err) {
-    // תופס כל שגיאה שהתרחשה בתוך try (למשל כשל רשת/מפתח API חסר/בעיה בתגובה)
-    console.error(err); // מדפיס את השגיאה ללוגים של השרת כדי שיהיה אפשר לדבג
-    res.status(500).json({ error: "Server error" }); // מחזיר ללקוח שגיאת 500 כללית
-  } // סוף try/catch
-}); // סוף הגדרת הנתיב /api/chat
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 
-const port = process.env.PORT || 3000; // קובע פורט: אם יש משתנה סביבה PORT משתמש בו, אחרת ברירת מחדל 3000
+// מאזין על פורט
+const port = process.env.PORT || 3000;
 app.listen(port, "0.0.0.0", () => {
-  // מפעיל את השרת ומאזין על כל הכתובות (0.0.0.0) בפורט שנבחר
-  console.log("Server listening on port", port); // מדפיס ללוג שהשרת עלה ולאיזה פורט הוא מאזין
-}); // סוף הפעלת השרת
+  console.log("Server listening on port", port);
+});

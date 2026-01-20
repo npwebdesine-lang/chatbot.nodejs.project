@@ -3,6 +3,65 @@ const form = document.getElementById("form");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
 
+// ✅ NEW UI
+const newChatBtn = document.getElementById("newChatBtn");
+const chatSelect = document.getElementById("chatSelect");
+
+// ===============================
+// ✅ NEW: ניהול צ'אטים בדפדפן
+// ===============================
+const STORAGE_KEY = "multiChats_v1";
+
+/**
+ * state = {
+ *   activeChatId: string,
+ *   chats: {
+ *     [chatId]: { title: string, messages: Array<{who:"me"|"bot", text:string}> }
+ *   }
+ * }
+ */
+let state = loadState();
+
+// יצירת מזהה ייחודי לצ'אט
+function makeId() {
+  return `chat_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function loadState() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch {}
+  }
+
+  // ברירת מחדל: צ'אט ראשון
+  const firstId = makeId();
+  const initial = {
+    activeChatId: firstId,
+    chats: {
+      [firstId]: {
+        title: "צ'אט 1",
+        messages: [],
+      },
+    },
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+  return initial;
+}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function getActiveChat() {
+  return state.chats[state.activeChatId];
+}
+
+function clearChatUI() {
+  chat.innerHTML = "";
+}
+
 function addBubble(text, who = "me") {
   const div = document.createElement("div");
   div.className = `bubble ${who}`;
@@ -11,28 +70,108 @@ function addBubble(text, who = "me") {
   chat.scrollTop = chat.scrollHeight;
 }
 
+function renderActiveChat() {
+  clearChatUI();
+  const active = getActiveChat();
+  for (const m of active.messages) {
+    addBubble(m.text, m.who);
+  }
+}
+
+function renderChatSelect() {
+  chatSelect.innerHTML = "";
+  const entries = Object.entries(state.chats);
+
+  entries.forEach(([id, chatObj], idx) => {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = chatObj.title || `צ'אט ${idx + 1}`;
+    if (id === state.activeChatId) opt.selected = true;
+    chatSelect.appendChild(opt);
+  });
+}
+
+function renameChatIfFirstMessage(chatId, firstUserMessage) {
+  const c = state.chats[chatId];
+  if (!c) return;
+  if (c.messages.length === 1 && c.title.startsWith("צ'אט")) {
+    // שם אוטומטי לפי תחילת ההודעה
+    c.title =
+      firstUserMessage.slice(0, 18) + (firstUserMessage.length > 18 ? "…" : "");
+  }
+}
+
+// ===============================
+// ✅ NEW: יצירת צ'אט חדש + מעבר צ'אטים
+// ===============================
+newChatBtn.addEventListener("click", () => {
+  const newId = makeId();
+  const count = Object.keys(state.chats).length + 1;
+
+  state.chats[newId] = { title: `צ'אט ${count}`, messages: [] };
+  state.activeChatId = newId;
+
+  saveState();
+  renderChatSelect();
+  renderActiveChat();
+  input.focus();
+});
+
+chatSelect.addEventListener("change", () => {
+  state.activeChatId = chatSelect.value;
+  saveState();
+  renderActiveChat();
+  input.focus();
+});
+
+// רינדור ראשוני
+renderChatSelect();
+renderActiveChat();
+
+// ===============================
+// שליחה וקבלת תשובה (עם chatId)
+// ===============================
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const msg = input.value.trim();
   if (!msg) return;
 
+  const activeId = state.activeChatId;
+  const activeChat = getActiveChat();
+
+  // ✅ שמירה מקומית של הודעת משתמש (היסטוריה בדפדפן)
+  activeChat.messages.push({ who: "me", text: msg });
+  renameChatIfFirstMessage(activeId, msg);
+
+  saveState();
+  renderChatSelect();
   addBubble(msg, "me");
+
   input.value = "";
   input.focus();
-
   sendBtn.disabled = true;
 
   try {
+    // ✅ NEW: שולחים גם chatId לשרת
     const r = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: msg }),
+      body: JSON.stringify({ chatId: activeId, message: msg }),
     });
+
     const data = await r.json();
     if (!r.ok) throw new Error(data?.error || "Request failed");
+
+    // ✅ שמירה מקומית של תשובת הבוט (היסטוריה בדפדפן)
+    activeChat.messages.push({ who: "bot", text: data.reply });
+
+    saveState();
     addBubble(data.reply, "bot");
   } catch (err) {
-    addBubble("שגיאה: " + err.message, "bot");
+    const errorMsg = "שגיאה: " + err.message;
+    activeChat.messages.push({ who: "bot", text: errorMsg });
+    saveState();
+    addBubble(errorMsg, "bot");
   } finally {
     sendBtn.disabled = false;
   }
