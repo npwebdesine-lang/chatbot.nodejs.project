@@ -133,15 +133,12 @@ deleteChatBtn.addEventListener("click", async () => {
   const ok = confirm("למחוק את הצ'אט הנוכחי? הפעולה לא ניתנת לשחזור.");
   if (!ok) return;
 
-  // ===============================
-  // ✅ NEW: מחיקה מהשרת
-  // ===============================
+  // ✅ מחיקה מהשרת - אם לא קיים שם (404) זה עדיין בסדר
   try {
-    const r = await fetch(`/api/chat/${activeId}`, {
-      method: "DELETE",
-    });
+    const r = await fetch(`/api/chat/${activeId}`, { method: "DELETE" });
 
-    if (!r.ok) {
+    // 404 = השרת לא מכיר את הצ'אט (אחרי redeploy/עוד לא נוצר) => לא חוסם מחיקה מקומית
+    if (!r.ok && r.status !== 404) {
       const data = await r.json().catch(() => ({}));
       throw new Error(data.error || "Failed to delete chat on server");
     }
@@ -150,13 +147,12 @@ deleteChatBtn.addEventListener("click", async () => {
     return;
   }
 
-  // ===============================
-  // מחיקה מקומית (LocalStorage)
-  // ===============================
+  // ✅ מחיקה מקומית (LocalStorage)
   delete state.chats[activeId];
 
   const remainingIds = Object.keys(state.chats);
 
+  // אם מחקנו את הצ'אט האחרון - יוצרים חדש
   if (remainingIds.length === 0) {
     const newId = makeId();
     state.chats[newId] = { title: "צ'אט 1", messages: [] };
