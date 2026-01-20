@@ -90,3 +90,6 @@ select {
   background: #0e1324;
   color: #eaf1ff;
 }
+#deleteChatBtn {
+  background: rgba(255, 80, 80, 0.9);
+}

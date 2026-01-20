@@ -2,6 +2,7 @@ const chat = document.getElementById("chat");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
+const deleteChatBtn = document.getElementById("deleteChatBtn");
 
 // ✅ NEW UI
 const newChatBtn = document.getElementById("newChatBtn");
@@ -120,6 +121,52 @@ newChatBtn.addEventListener("click", () => {
 chatSelect.addEventListener("change", () => {
   state.activeChatId = chatSelect.value;
   saveState();
+  renderActiveChat();
+  input.focus();
+});
+
+deleteChatBtn.addEventListener("click", async () => {
+  const activeId = state.activeChatId;
+
+  if (!activeId || !state.chats[activeId]) return;
+
+  const ok = confirm("למחוק את הצ'אט הנוכחי? הפעולה לא ניתנת לשחזור.");
+  if (!ok) return;
+
+  // ===============================
+  // ✅ NEW: מחיקה מהשרת
+  // ===============================
+  try {
+    const r = await fetch(`/api/chat/${activeId}`, {
+      method: "DELETE",
+    });
+
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.error || "Failed to delete chat on server");
+    }
+  } catch (err) {
+    alert("שגיאה במחיקה מהשרת: " + err.message);
+    return;
+  }
+
+  // ===============================
+  // מחיקה מקומית (LocalStorage)
+  // ===============================
+  delete state.chats[activeId];
+
+  const remainingIds = Object.keys(state.chats);
+
+  if (remainingIds.length === 0) {
+    const newId = makeId();
+    state.chats[newId] = { title: "צ'אט 1", messages: [] };
+    state.activeChatId = newId;
+  } else {
+    state.activeChatId = remainingIds[0];
+  }
+
+  saveState();
+  renderChatSelect();
   renderActiveChat();
   input.focus();
 });

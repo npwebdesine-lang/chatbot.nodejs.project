@@ -49,6 +49,23 @@ function trimHistory(messages) {
 
   return [...system, ...trimmedRest];
 }
+// ===============================
+// ✅ NEW: מחיקת צ'אט מהשרת
+// ===============================
+app.delete("/api/chat/:chatId", (req, res) => {
+  const { chatId } = req.params;
+
+  if (!chatId) {
+    return res.status(400).json({ error: "chatId is required" });
+  }
+
+  if (!chats.has(chatId)) {
+    return res.status(404).json({ error: "Chat not found" });
+  }
+
+  chats.delete(chatId);
+  res.json({ ok: true });
+});
 
 // (לא חובה, אבל נחמד) לראות אילו צ'אטים קיימים בזיכרון השרת
 app.get("/api/chats", (req, res) => {
