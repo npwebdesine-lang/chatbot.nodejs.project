@@ -19,6 +19,9 @@ app.use(express.static(path.join(__dirname, "public")));
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.get("/healthz", (req, res) => res.status(200).send("ok")); // נתיב בדיקת בריאות: מחזיר 200 וטקסט "ok" כדי לוודא שהשרת חי
+app.get("/", (req, res) => {
+  res.send("Server is running ✅");
+});
 
 app.post("/api/chat", async (req, res) => {
   // מגדיר נתיב POST ל-API של צ'אט; async כי יהיו פעולות אסינכרוניות (קריאת API)
